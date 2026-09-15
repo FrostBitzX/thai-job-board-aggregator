@@ -1,0 +1,52 @@
+# Env — never commit real secrets
+.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / coverage
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Playwright
+playwright/.auth/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Kiro IDE
+.kiro/
+
+# Project-specific exclusions
+example_api_*.txt
+CONTEXT.md
+PLAN.md
+**/tasks.meta.json
