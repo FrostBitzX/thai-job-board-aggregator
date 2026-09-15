@@ -188,3 +188,126 @@ async def test_search_trims_to_page_size():
         results = await JobsDBScraper().search(criteria)
 
     assert len(results) == 3
+
+
+# ---------------------------------------------------------------------------
+# Tests for get_detail() and _parse_experience  (task 5.2)
+# ---------------------------------------------------------------------------
+
+from backend.scrapers.jobsdb import _parse_experience
+
+
+def _make_detail_response(
+    content: str | None = None,
+    content2_content: str | None = None,
+    work_type: str | None = None,
+) -> MagicMock:
+    job_node: dict = {}
+    if content is not None:
+        job_node["content"] = content
+    if content2_content is not None:
+        job_node["content2"] = {"content": content2_content}
+
+    payload = {
+        "data": {
+            "jobDetails": {
+                "job": job_node,
+                "seoInfo": {"workType": work_type},
+            }
+        }
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = payload
+    mock_resp.raise_for_status = MagicMock()
+    return mock_resp
+
+
+# --- _parse_experience unit tests ---
+
+@pytest.mark.parametrize("text,expected", [
+    (None,                  (None, None)),
+    ("",                    (None, None)),
+    ("Graduate",            (None, None)),
+    ("No experience",       (0.0,  0.0)),
+    ("No Experience Required", (0.0, 0.0)),
+    ("2 years experience",  (2.0,  None)),
+    ("2+ years",            (2.0,  None)),
+    ("5 years",             (5.0,  None)),
+    ("2-5 years",           (2.0,  5.0)),
+    ("2 - 5 years",         (2.0,  5.0)),
+    ("3–7 years",           (3.0,  7.0)),
+])
+def test_parse_experience(text, expected):
+    assert _parse_experience(text) == expected
+
+
+# --- get_detail() unit tests ---
+
+async def test_get_detail_maps_content_and_experience():
+    """Happy path: content and experience extracted correctly."""
+    mock_resp = _make_detail_response(
+        content="<p>Job description here</p>",
+        work_type="2-5 years",
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_client
+
+        job = await JobsDBScraper().get_detail("job-123")
+
+    assert job.id == "job-123"
+    assert job.content == "<p>Job description here</p>"
+    assert job.experience_min_years == 2.0
+    assert job.experience_max_years == 5.0
+
+
+async def test_get_detail_prefers_content2():
+    """content2.content takes priority over plain content."""
+    mock_resp = _make_detail_response(
+        content="plain content",
+        content2_content="<p>richer content</p>",
+        work_type=None,
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_client
+
+        job = await JobsDBScraper().get_detail("job-456")
+
+    assert job.content == "<p>richer content</p>"
+    assert job.experience_min_years is None
+    assert job.experience_max_years is None
+
+
+async def test_get_detail_retry_exhaustion_returns_shell():
+    """On retry exhaustion get_detail() returns a shell Job (not raises)."""
+    from backend.scrapers.base import ScraperError as SE
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        # Always return 503 → exhausts retries → ScraperError
+        mock_resp = MagicMock()
+        mock_resp.status_code = 503
+        mock_resp.request = MagicMock()
+        mock_resp.response = mock_resp
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_client
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            job = await JobsDBScraper().get_detail("job-fail")
+
+    assert job.id == "job-fail"
+    assert job.content is None
+    assert job.skills_mentioned == []
+    assert job.experience_min_years is None

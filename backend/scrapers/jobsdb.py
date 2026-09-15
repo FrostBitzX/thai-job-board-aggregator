@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 import httpx
 
@@ -51,6 +52,20 @@ query JobSearchV7($params: JobSearchV7QueryInput!, $locale: Locale!, $zone: Zone
         }
       }
       pagination { page pageSize resultCount }
+    }
+  }
+}
+""".strip()
+
+_DETAIL_QUERY = """
+query jobDetails($jobId: ID!, $zone: Zone!, $locale: Locale!, $countryCode: CountryCodeIso2!, $timezone: Timezone!) {
+  jobDetails(id: $jobId, tracking: {channel: "WEB"}) {
+    job {
+      content(platform: WEB)
+      content2(zone: $zone) { content }
+    }
+    seoInfo {
+      workType
     }
   }
 }
@@ -183,6 +198,36 @@ async def _post_with_retry(client: httpx.AsyncClient, payload: dict) -> dict:
     raise ScraperError(code="scraper_exhausted") from last_exc
 
 
+def _parse_experience(work_type: str | None) -> tuple[float | None, float | None]:
+    """Parse seoInfo.workType text into (min_years, max_years).
+
+    Examples:
+      "2 years experience" → (2.0, None)
+      "2-5 years"          → (2.0, 5.0)
+      "No experience"      → (0.0, 0.0)
+      anything else        → (None, None)
+    """
+    if not work_type:
+        return None, None
+
+    text = work_type.strip().lower()
+
+    if "no experience" in text:
+        return 0.0, 0.0
+
+    # "2-5 years" or "2 - 5 years"
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*year", text)
+    if range_match:
+        return float(range_match.group(1)), float(range_match.group(2))
+
+    # "2 years" / "2+ years" / "at least 2 years"
+    single_match = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*year", text)
+    if single_match:
+        return float(single_match.group(1)), None
+
+    return None, None
+
+
 class JobsDBScraper(BaseScraper):
     source_name = "jobsdb"
 
@@ -223,4 +268,58 @@ class JobsDBScraper(BaseScraper):
         return jobs[: criteria.page_size]
 
     async def get_detail(self, job_id: str) -> Job:
-        raise NotImplementedError("get_detail() implemented in task 5.2")
+        """Fetch detail for a single job and return a Job carrying content + experience.
+
+        The caller (task 7.1) merges these fields back onto the listing-level Job.
+        On retry exhaustion, returns a shell Job so the caller can retain listing
+        fields and set skills_mentioned=[] rather than failing the whole search.
+        """
+        payload = {
+            "operationName": "jobDetails",
+            "variables": {
+                "jobId": job_id,
+                "zone": "asia-3",
+                "locale": "en-TH",
+                "countryCode": "TH",
+                "timezone": "Asia/Bangkok",
+            },
+            "query": _DETAIL_QUERY,
+        }
+
+        async with httpx.AsyncClient() as client:
+            try:
+                data = await _post_with_retry(client, payload)
+            except ScraperError:
+                # Exhausted retries: return a shell so caller falls back gracefully
+                return Job(
+                    id=job_id, title="", company=None, location=None,
+                    salary_min=None, salary_max=None, currency=None,
+                    salary_display=None, salary_is_numeric=False,
+                    work_arrangement=None, experience_min_years=None,
+                    experience_max_years=None, categories=[], skills_mentioned=[],
+                    abstract=None, content=None, url="", listed_at=None,
+                    source="jobsdb", raw=None,
+                )
+
+        detail = (data.get("data") or {}).get("jobDetails") or {}
+        job_node = detail.get("job") or {}
+        seo_info = detail.get("seoInfo") or {}
+
+        # content2 (click-to-reveal path) takes priority over plain content
+        content2 = job_node.get("content2") or {}
+        content: str | None = content2.get("content") or job_node.get("content")
+
+        exp_min, exp_max = _parse_experience(seo_info.get("workType"))
+
+        return Job(
+            id=job_id, title="", company=None, location=None,
+            salary_min=None, salary_max=None, currency=None,
+            salary_display=None, salary_is_numeric=False,
+            work_arrangement=None,
+            experience_min_years=exp_min,
+            experience_max_years=exp_max,
+            categories=[], skills_mentioned=[],
+            abstract=None, content=content,
+            url="", listed_at=None,
+            source="jobsdb", raw=None,
+        )
