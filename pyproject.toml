@@ -14,3 +14,8 @@ dependencies = [
     "playwright==1.47.0",
     "hypothesis==6.112.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
