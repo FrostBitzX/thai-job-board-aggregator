@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
+from urllib.parse import quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 from backend.config import settings
 from backend.models.job import Job, SearchCriteria
@@ -257,6 +262,55 @@ def _parse_experience(work_type: str | None) -> tuple[float | None, float | None
     return None, None
 
 
+def _map_jsonld_job(entry: dict) -> Job:
+    """Map a JSON-LD JobPosting entry → Job (Req 3.4).
+
+    All absent fields map to None/empty as required.
+    """
+    hiring_org = entry.get("hiringOrganization") or {}
+    job_location = entry.get("jobLocation") or {}
+    address = job_location.get("address") or {}
+    base_salary = entry.get("baseSalary") or {}
+    salary_value = base_salary.get("value") or {}
+
+    salary_min: float | None = salary_value.get("minValue")
+    salary_max: float | None = salary_value.get("maxValue")
+    salary_is_numeric = salary_min is not None and salary_max is not None
+
+    if salary_is_numeric:
+        salary_display = f"{salary_min:g}-{salary_max:g}"
+    else:
+        salary_display = "Other"
+
+    content: str | None = entry.get("description") or None
+    url: str = entry.get("url") or ""
+    if url.startswith("/"):
+        url = _BASE_URL + url
+
+    return Job(
+        id=entry.get("identifier", {}).get("value") or url or "",
+        title=entry.get("title") or "",
+        company=hiring_org.get("name"),
+        location=address.get("addressLocality"),
+        salary_min=salary_min,
+        salary_max=salary_max,
+        currency=salary_value.get("currency"),
+        salary_display=salary_display,
+        salary_is_numeric=salary_is_numeric,
+        work_arrangement=None,
+        experience_min_years=None,
+        experience_max_years=None,
+        categories=[],
+        skills_mentioned=extract_skills(content) if content else [],
+        abstract=None,
+        content=content,
+        url=url,
+        listed_at=entry.get("datePosted"),
+        source="jobsdb",
+        raw=None,
+    )
+
+
 class JobsDBScraper(BaseScraper):
     source_name = "jobsdb"
 
@@ -264,35 +318,116 @@ class JobsDBScraper(BaseScraper):
         jobs: list[Job] = []
         page_num = 1
 
-        async with httpx.AsyncClient() as client:
-            while True:
-                payload = {
-                    "operationName": "JobSearchV7",
-                    "variables": _build_variables(criteria, page_num),
-                    "query": _QUERY,
-                }
-                data = await _post_with_retry(client, payload)
+        try:
+            async with httpx.AsyncClient() as client:
+                while True:
+                    payload = {
+                        "operationName": "JobSearchV7",
+                        "variables": _build_variables(criteria, page_num),
+                        "query": _QUERY,
+                    }
+                    data = await _post_with_retry(client, payload)
 
-                results = (
-                    data.get("data", {})
-                    .get("jobSearchV7", {})
-                    .get("results", {})
-                )
-                page_jobs: list[dict] = results.get("jobs") or []
-                pagination: dict = results.get("pagination") or {}
-                result_count: int = pagination.get("resultCount", 0)
+                    results = (
+                        data.get("data", {})
+                        .get("jobSearchV7", {})
+                        .get("results", {})
+                    )
+                    page_jobs: list[dict] = results.get("jobs") or []
+                    pagination: dict = results.get("pagination") or {}
+                    result_count: int = pagination.get("resultCount", 0)
 
-                if not page_jobs:
-                    break
+                    if not page_jobs:
+                        break
 
-                jobs.extend(_map_job(j) for j in page_jobs)
+                    jobs.extend(_map_job(j) for j in page_jobs)
 
-                if len(jobs) >= criteria.page_size:
-                    break
-                if len(jobs) >= result_count:
-                    break
+                    if len(jobs) >= criteria.page_size:
+                        break
+                    if len(jobs) >= result_count:
+                        break
 
-                page_num += 1
+                    page_num += 1
+
+        except (_AuthError, ScraperError):
+            logger.info("GraphQL path failed; switching to Playwright fallback")
+            return await self._playwright_search(criteria)
+
+        return jobs[: criteria.page_size]
+
+    async def _playwright_search(self, criteria: SearchCriteria) -> list[Job]:
+        """Playwright fallback: scrape JSON-LD JobPosting blocks from th.jobsdb.com.
+
+        Requirements 3.1–3.7.
+        """
+        from playwright.async_api import async_playwright, TimeoutError as PwTimeout
+
+        kw_slug = re.sub(r"\s+", "-", criteria.keywords.strip().lower())
+        jobs: list[Job] = []
+        page_num = 1
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+
+                while len(jobs) < criteria.page_size:
+                    page_param = f"?page={page_num}" if page_num > 1 else ""
+                    url = f"{_BASE_URL}/th/{kw_slug}-jobs{page_param}"
+                    last_exc: Exception | None = None
+
+                    for attempt in range(3):
+                        try:
+                            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                            # Wait up to 30 s for the JSON-LD script tag (Req 3.2)
+                            await page.wait_for_selector(
+                                'script[type="application/ld+json"]', timeout=30_000
+                            )
+                            last_exc = None
+                            break
+                        except PwTimeout as exc:
+                            last_exc = exc
+                            logger.warning(
+                                "Playwright timeout page=%d attempt=%d: %s",
+                                page_num, attempt + 1, exc,
+                            )
+                            await asyncio.sleep(_RETRY_BASE_DELAY * (2**attempt))
+                        except Exception as exc:
+                            last_exc = exc
+                            logger.warning(
+                                "Playwright nav error page=%d attempt=%d: %s",
+                                page_num, attempt + 1, exc,
+                            )
+                            await asyncio.sleep(_RETRY_BASE_DELAY * (2**attempt))
+
+                    if last_exc is not None:
+                        raise ScraperError(code="scraper_auth") from last_exc
+
+                    # Extract all JSON-LD blocks and keep @type == JobPosting (Req 3.3)
+                    handles = await page.query_selector_all('script[type="application/ld+json"]')
+                    page_jobs: list[Job] = []
+                    for handle in handles:
+                        try:
+                            raw_text = await handle.inner_text()
+                            block = json.loads(raw_text)
+                        except Exception:
+                            continue
+
+                        # block may be a list or a single object
+                        entries = block if isinstance(block, list) else [block]
+                        for entry in entries:
+                            if entry.get("@type") != "JobPosting":
+                                continue
+                            page_jobs.append(_map_jsonld_job(entry))
+
+                    if not page_jobs:
+                        break  # No more results (Req 3.6)
+
+                    jobs.extend(page_jobs)
+                    page_num += 1
+
+            finally:
+                await browser.close()
 
         return jobs[: criteria.page_size]
 
