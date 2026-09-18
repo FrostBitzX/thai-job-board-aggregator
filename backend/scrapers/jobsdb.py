@@ -4,6 +4,7 @@ import asyncio
 import re
 
 import httpx
+from bs4 import BeautifulSoup
 
 from backend.config import settings
 from backend.models.job import Job, SearchCriteria
@@ -80,6 +81,34 @@ _AUTH_FAIL_STATUS = {401, 403}
 
 class _AuthError(Exception):
     """Sentinel raised on HTTP 401/403 to trigger Playwright fallback."""
+
+
+SKILLS_VOCAB: list[str] = [
+    "python", "javascript", "typescript", "java", "go", "rust",
+    "c++", "c#", "sql", "nosql", "react", "vue", "angular",
+    "node.js", "fastapi", "django", "flask", "spring",
+    "docker", "kubernetes", "aws", "gcp", "azure", "terraform", "git",
+    "ci/cd", "agile", "scrum", "jira", "figma", "excel",
+    "powerbi", "tableau", "data analysis", "machine learning",
+    "deep learning", "communication", "leadership", "project management",
+]
+
+
+_BOUNDARY = r"(?<!\w){term}(?!\w)"
+
+
+def extract_skills(html_content: str, vocab: list[str] = SKILLS_VOCAB) -> list[str]:
+    """Return a sorted, deduplicated list of skill terms found in *html_content*.
+
+    HTML is stripped via BeautifulSoup; matching is case-insensitive whole-word.
+    """
+    text = BeautifulSoup(html_content, "html.parser").get_text().lower()
+    matched = {
+        term
+        for term in vocab
+        if re.search(_BOUNDARY.format(term=re.escape(term)), text)
+    }
+    return sorted(matched)
 
 
 def _build_variables(criteria: SearchCriteria, page_num: int) -> dict:
@@ -318,7 +347,7 @@ class JobsDBScraper(BaseScraper):
             work_arrangement=None,
             experience_min_years=exp_min,
             experience_max_years=exp_max,
-            categories=[], skills_mentioned=[],
+            categories=[], skills_mentioned=extract_skills(content) if content else [],
             abstract=None, content=content,
             url="", listed_at=None,
             source="jobsdb", raw=None,

@@ -311,3 +311,68 @@ async def test_get_detail_retry_exhaustion_returns_shell():
     assert job.content is None
     assert job.skills_mentioned == []
     assert job.experience_min_years is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for extract_skills (task 5.3)
+# ---------------------------------------------------------------------------
+
+from backend.scrapers.jobsdb import SKILLS_VOCAB, extract_skills
+
+
+def test_extract_skills_case_insensitive():
+    """`python` matched regardless of case in HTML."""
+    assert "python" in extract_skills("<p>Python developer</p>")
+
+
+def test_extract_skills_go_boundary():
+    """`go` must NOT match inside `django` or `mongo`."""
+    result = extract_skills("<p>django mongo</p>")
+    assert "go" not in result
+
+
+def test_extract_skills_go_standalone():
+    """`go` matched when it appears as a standalone word."""
+    assert "go" in extract_skills("<p>We use Go and Docker</p>")
+
+
+def test_extract_skills_deduplication():
+    """Each term appears at most once even if it appears multiple times in text."""
+    result = extract_skills("<p>Python python PYTHON</p>")
+    assert result.count("python") == 1
+
+
+def test_extract_skills_sorted():
+    """Returned list is sorted alphabetically."""
+    result = extract_skills("<p>python docker aws</p>")
+    assert result == sorted(result)
+
+
+def test_extract_skills_strips_html():
+    """HTML tags are stripped before matching."""
+    assert "python" in extract_skills("<div><b>Python</b> is great</div>")
+
+
+def test_extract_skills_special_chars():
+    """Terms with non-word chars (c++, c#, node.js, ci/cd) are matched."""
+    html = "<p>We use C++, C#, Node.js, and CI/CD pipelines</p>"
+    result = extract_skills(html)
+    assert "c++" in result
+    assert "c#" in result
+    assert "node.js" in result
+    assert "ci/cd" in result
+
+
+def test_extract_skills_multi_word():
+    """Multi-word terms like `data analysis` are matched correctly."""
+    assert "data analysis" in extract_skills("<p>Experience in data analysis required</p>")
+
+
+def test_extract_skills_empty_content():
+    """Empty string returns empty list."""
+    assert extract_skills("") == []
+
+
+def test_skills_vocab_minimum_count():
+    """Vocabulary contains at least 39 terms as required."""
+    assert len(SKILLS_VOCAB) >= 39
