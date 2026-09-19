@@ -311,6 +311,43 @@ def _map_jsonld_job(entry: dict) -> Job:
     )
 
 
+async def fetch_details_batched(
+    scraper: BaseScraper, jobs: list[Job]
+) -> list[Job]:
+    """Fetch detail for every job in *jobs*, in batches of DETAIL_BATCH_SIZE.
+
+    Uses ``asyncio.gather(..., return_exceptions=True)`` so a single failure
+    never aborts the whole batch.  On per-job failure the original listing
+    fields are kept and ``skills_mentioned`` is set to ``[]``.
+    """
+    batch_size = settings.DETAIL_BATCH_SIZE
+    enriched: list[Job] = []
+
+    for i in range(0, len(jobs), batch_size):
+        batch = jobs[i : i + batch_size]
+        results = await asyncio.gather(
+            *[scraper.get_detail(j.id) for j in batch],
+            return_exceptions=True,
+        )
+        for listing_job, detail in zip(batch, results):
+            if isinstance(detail, BaseException):
+                logger.warning("get_detail failed for job %s: %s", listing_job.id, detail)
+                enriched.append(listing_job.model_copy(update={"skills_mentioned": []}))
+            else:
+                enriched.append(
+                    listing_job.model_copy(
+                        update={
+                            "content": detail.content,
+                            "skills_mentioned": detail.skills_mentioned,
+                            "experience_min_years": detail.experience_min_years,
+                            "experience_max_years": detail.experience_max_years,
+                        }
+                    )
+                )
+
+    return enriched
+
+
 class JobsDBScraper(BaseScraper):
     source_name = "jobsdb"
 

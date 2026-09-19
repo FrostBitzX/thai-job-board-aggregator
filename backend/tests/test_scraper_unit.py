@@ -376,3 +376,112 @@ def test_extract_skills_empty_content():
 def test_skills_vocab_minimum_count():
     """Vocabulary contains at least 39 terms as required."""
     assert len(SKILLS_VOCAB) >= 39
+
+
+# ---------------------------------------------------------------------------
+# Tests for fetch_details_batched (task 7.1)
+# ---------------------------------------------------------------------------
+
+from backend.scrapers.jobsdb import fetch_details_batched
+
+
+def _make_listing_job(job_id: str) -> "Job":
+    from backend.models.job import Job as _Job
+    return _Job(
+        id=job_id, title="Dev", company="Co", location="BKK",
+        salary_min=None, salary_max=None, currency=None,
+        salary_display=None, salary_is_numeric=False,
+        work_arrangement=None, experience_min_years=None,
+        experience_max_years=None, categories=[], skills_mentioned=[],
+        abstract=None, content=None, url="https://example.com",
+        listed_at=None, source="jobsdb", raw=None,
+    )
+
+
+def _make_detail_job(job_id: str, content: str, skills: list[str],
+                     exp_min: float | None = None, exp_max: float | None = None):
+    from backend.models.job import Job as _Job
+    return _Job(
+        id=job_id, title="", company=None, location=None,
+        salary_min=None, salary_max=None, currency=None,
+        salary_display=None, salary_is_numeric=False,
+        work_arrangement=None, experience_min_years=exp_min,
+        experience_max_years=exp_max, categories=[], skills_mentioned=skills,
+        abstract=None, content=content, url="", listed_at=None,
+        source="jobsdb", raw=None,
+    )
+
+
+async def test_fetch_details_batched_merges_fields():
+    """Happy path: listing fields preserved; content/skills/experience from detail."""
+    listing = _make_listing_job("j1")
+    detail = _make_detail_job("j1", "<p>python dev</p>", ["python"], 2.0, 5.0)
+
+    scraper = MagicMock()
+    scraper.get_detail = AsyncMock(return_value=detail)
+
+    results = await fetch_details_batched(scraper, [listing])
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.id == "j1"
+    assert r.title == "Dev"          # listing field preserved
+    assert r.company == "Co"         # listing field preserved
+    assert r.content == "<p>python dev</p>"
+    assert r.skills_mentioned == ["python"]
+    assert r.experience_min_years == 2.0
+    assert r.experience_max_years == 5.0
+
+
+async def test_fetch_details_batched_failure_keeps_listing():
+    """On per-job failure: listing fields kept, skills_mentioned set to []."""
+    listing = _make_listing_job("j2")
+
+    scraper = MagicMock()
+    scraper.get_detail = AsyncMock(side_effect=RuntimeError("boom"))
+
+    results = await fetch_details_batched(scraper, [listing])
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.id == "j2"
+    assert r.title == "Dev"
+    assert r.skills_mentioned == []
+    assert r.content is None        # unchanged from listing
+
+
+async def test_fetch_details_batched_one_failure_does_not_kill_batch():
+    """A failure on job[0] does not affect job[1] in the same batch."""
+    jobs = [_make_listing_job("ok"), _make_listing_job("fail")]
+    detail_ok = _make_detail_job("ok", "<p>go</p>", ["go"])
+
+    async def _get_detail(job_id: str):
+        if job_id == "fail":
+            raise ValueError("network error")
+        return detail_ok
+
+    scraper = MagicMock()
+    scraper.get_detail = _get_detail
+
+    results = await fetch_details_batched(scraper, jobs)
+
+    assert results[0].skills_mentioned == ["go"]
+    assert results[1].skills_mentioned == []
+    assert results[1].title == "Dev"
+
+
+async def test_fetch_details_batched_respects_batch_size(monkeypatch):
+    """Jobs are processed in chunks of DETAIL_BATCH_SIZE; gather called per batch."""
+    import backend.scrapers.jobsdb as jmod
+    monkeypatch.setattr(jmod.settings, "DETAIL_BATCH_SIZE", 2)
+
+    jobs = [_make_listing_job(f"j{i}") for i in range(5)]
+    detail = _make_detail_job("x", "", [])
+
+    scraper = MagicMock()
+    scraper.get_detail = AsyncMock(return_value=detail)
+
+    results = await fetch_details_batched(scraper, jobs)
+
+    assert len(results) == 5
+    assert scraper.get_detail.call_count == 5
