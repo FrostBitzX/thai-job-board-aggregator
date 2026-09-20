@@ -50,3 +50,8 @@ example_api_*.txt
 CONTEXT.md
 PLAN.md
 **/tasks.meta.json
+# Frontend (Vite / Vue)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/pnpm-lock.yaml
