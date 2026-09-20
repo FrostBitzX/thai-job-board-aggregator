@@ -9,4 +9,8 @@ export default defineConfig({
       '/export': 'http://localhost:8000',
     },
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+  },
 })

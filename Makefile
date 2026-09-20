@@ -11,9 +11,13 @@ install:  ## install dependencies + playwright chromium
 
 # --- Tests ------------------------------------------------------------------
 
-.PHONY: test
-test:  ## run all tests
+.PHONY: test-backend
+test-backend:  ## run all backend tests
 	$(PYTEST) backend/tests/ -v
+
+.PHONY: test-frontend
+test-frontend:  ## run all frontend tests (vitest)
+	cd frontend && pnpm run test -- --run
 
 .PHONY: test-scraper
 test-scraper:  ## run scraper tests only
