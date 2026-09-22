@@ -5,6 +5,7 @@ import WeightSliders from './components/WeightSliders.vue'
 import ResultsTable from './components/ResultsTable.vue'
 import ExportBar from './components/ExportBar.vue'
 import { searchJobs } from './api.js'
+import { DEFAULT_WEIGHTS } from './config/defaults'
 
 const jobs      = ref([])
 const searchId  = ref(null)
@@ -16,13 +17,7 @@ const cached    = ref(false)
 const lastCriteria = ref(null)
 
 // Tracks the latest weights from WeightSliders; merged into criteria on submit
-const currentWeights = ref({
-  keywords_weight:  0.30,
-  skills_weight:    0.25,
-  salary_weight:    0.20,
-  location_weight:  0.15,
-  experience_weight: 0.10,
-})
+const currentWeights = ref({ ...DEFAULT_WEIGHTS })
 
 function onWeightsUpdate(weights) {
   currentWeights.value = weights

@@ -128,7 +128,9 @@ function primaryCategory(categories) {
   padding: 9px 12px;
   text-align: left;
   border-bottom: 1px solid #e5e7eb;
-  white-space: nowrap;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .results-table th {
@@ -195,8 +197,8 @@ function primaryCategory(categories) {
 }
 
 .col-title {
-  max-width: 260px;
-  white-space: normal;
+  max-width: 300px;
+  min-width: 200px;
 }
 
 .col-date {

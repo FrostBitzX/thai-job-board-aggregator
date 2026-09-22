@@ -1,146 +1,167 @@
 <script setup>
 import { ref, computed } from 'vue'
+import { DEFAULT_WEIGHTS_PERCENT, WEIGHT_LABELS } from '@/config/defaults'
 
 const emit = defineEmits(['update:weights'])
 
-const DEFAULTS = { keywords: 30, skills: 25, salary: 20, location: 15, experience: 10 }
-const LABELS = ['keywords', 'skills', 'salary', 'location', 'experience']
 
-const weights = ref({ ...DEFAULTS })
+const DEFAULTS = DEFAULT_WEIGHTS_PERCENT
+const LABELS = WEIGHT_LABELS
+
+
+const weights = ref([...DEFAULTS])
 const open = ref(false)
 
-function onSliderInput(changed, rawValue) {
-  const newVal = Math.round(Number(rawValue))
-  const oldVal = weights.value[changed]
-  const delta = newVal - oldVal
-
-  if (delta === 0) return
-
-  // Other sliders that can absorb the delta (non-zero, or we're giving back)
-  const others = LABELS.filter(k => k !== changed)
-  const absorbers = delta > 0
-    ? others.filter(k => weights.value[k] > 0)   // taking from non-zero
-    : others                                        // giving back to all
-
-  if (absorbers.length === 0) {
-    // Only one non-zero slider — no effect
-    return
+function onSliderInput(idx, event) {
+  const raw = event.target.value
+  const current = weights.value[idx]
+  const sum = weights.value.reduce((a, b) => a + b, 0)
+  const remaining = 100 - sum
+  const ceiling = current + remaining
+  const next = Math.max(0, Math.min(Math.round(Number(raw)), ceiling))
+  
+  if (next !== Number(raw)) {
+    event.target.value = next
   }
+  
+  weights.value[idx] = next
+  emitWeights()
+}
 
-  const totalAbsorber = absorbers.reduce((s, k) => s + weights.value[k], 0)
+function onNumberInput(idx, event) {
+  const raw = event.target.value
+  const current = weights.value[idx]
 
-  // If shrinking below 0, clamp the moved slider
-  const clampedNew = Math.max(0, Math.min(100, newVal))
-  const actualDelta = clampedNew - oldVal
+  const sum = weights.value.reduce((a, b) => a + b, 0)
+  const remaining = 100 - sum
+  
+  const ceiling = current + remaining
 
-  if (actualDelta === 0) return
-
-  const next = { ...weights.value, [changed]: clampedNew }
-
-  if (totalAbsorber === 0) {
-    // Can't distribute — revert
-    return
-  }
-
-  // Distribute -actualDelta proportionally across absorbers
-  let remaining = -actualDelta
-  absorbers.forEach((k, i) => {
-    if (i === absorbers.length - 1) {
-      // Last absorber gets the remainder to avoid rounding drift
-      next[k] = Math.max(0, weights.value[k] + remaining)
-    } else {
-      const share = Math.round((-actualDelta) * (weights.value[k] / totalAbsorber))
-      next[k] = Math.max(0, weights.value[k] + share)
-      remaining -= share
-    }
-  })
-
-  // Final guard: clamp all and re-pin total to 100
-  LABELS.forEach(k => { next[k] = Math.max(0, Math.min(100, next[k])) })
-  const total = LABELS.reduce((s, k) => s + next[k], 0)
-  if (total !== 100) {
-    // Pin the moved slider to absorb the rounding residual
-    next[changed] = clampedNew + (100 - total)
-  }
-
-  weights.value = next
+  const next = Math.max(0, Math.min(Math.round(Number(raw) || 0), ceiling))
+  
+  weights.value[idx] = next
   emitWeights()
 }
 
 function reset() {
-  weights.value = { ...DEFAULTS }
+  weights.value = [...DEFAULTS]
   emitWeights()
 }
 
 function emitWeights() {
   emit('update:weights', {
-    keywords_weight: weights.value.keywords / 100,
-    skills_weight: weights.value.skills / 100,
-    salary_weight: weights.value.salary / 100,
-    location_weight: weights.value.location / 100,
-    experience_weight: weights.value.experience / 100,
+    keywords_weight: weights.value[0] / 100,
+    skills_weight: weights.value[1] / 100,
+    salary_weight: weights.value[2] / 100,
+    location_weight: weights.value[3] / 100,
+    experience_weight: weights.value[4] / 100,
   })
 }
 
-const sliders = computed(() =>
-  LABELS.map(key => ({ key, label: key.charAt(0).toUpperCase() + key.slice(1) }))
-)
+const totalWeight = computed(() => {
+  return weights.value.reduce((sum, val) => sum + val, 0)
+})
+
+const isDefault = computed(() => {
+  return weights.value.every((val, idx) => val === DEFAULTS[idx])
+})
+
+const isOverLimit = computed(() => totalWeight.value > 100)
 </script>
 
 <template>
   <div class="weight-sliders">
     <button type="button" class="toggle-btn" @click="open = !open" :aria-expanded="open.toString()">
-      Adjust Scoring Weights
-      <span class="chevron" :class="{ rotated: open }" aria-hidden="true">▾</span>
+      <span>Adjust Scoring Weights</span>
+      <span class="chevron" :class="{ rotated: open }">▾</span>
     </button>
 
     <div v-if="open" class="sliders-panel">
-      <div v-for="s in sliders" :key="s.key" class="slider-row">
-        <label :for="`weight-${s.key}`" class="slider-label">{{ s.label }}</label>
-        <input
-          :id="`weight-${s.key}`"
-          type="range"
-          min="0"
-          max="100"
-          step="1"
-          :value="weights[s.key]"
-          @input="onSliderInput(s.key, $event.target.value)"
-          class="slider"
-        />
-        <span class="slider-pct">{{ weights[s.key] }}%</span>
+      <div class="panel-header">
+        <div class="total-info">
+          <span class="total-label">Total:</span>
+          <span class="total-value" :class="{ 'over-limit': isOverLimit }">
+            {{ totalWeight }}%
+          </span>
+          <span v-if="isOverLimit" class="lock-notice">Over 100% - reduce weights to increase others</span>
+          <span v-else-if="totalWeight >= 100" class="lock-notice">At 100% - reduce weights to increase others</span>
+        </div>
       </div>
 
-      <button type="button" class="reset-btn" @click="reset">Reset to defaults</button>
+      <div class="sliders-list">
+        <div v-for="item in LABELS" :key="item.key" class="slider-row">
+          <label :for="`weight-${item.key}`" class="slider-label">{{ item.label }}</label>
+          
+          <div class="slider-control">
+            <input
+              :id="`weight-${item.key}`"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              :value="weights[item.idx]"
+              @input="onSliderInput(item.idx, $event)"
+              class="slider"
+            />
+            <input 
+              type="number" 
+              :value="weights[item.idx]"
+              @change="onNumberInput(item.idx, $event)"
+              min="0"
+              max="100"
+              step="1"
+              class="slider-number"
+            />
+            <span class="pct">%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <a 
+          v-if="!isDefault"
+          href="#" 
+          class="reset-link" 
+          @click.prevent="reset"
+        >
+          Reset to default
+        </a>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .weight-sliders {
-  max-width: 720px;
+  max-width: 100%;
+  margin: 16px 0;
 }
 
 .toggle-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: none;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  padding: 7px 14px;
-  font-size: 0.875rem;
-  font-weight: 600;
+  gap: 8px;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
-  color: #333;
+  color: #374151;
+  transition: all 0.2s;
 }
 
 .toggle-btn:hover {
-  background: #f5f5f5;
+  background: #f9fafb;
+  border-color: #9ca3af;
 }
 
 .chevron {
   display: inline-block;
+  margin-left: auto;
   transition: transform 0.2s;
+  color: #6b7280;
 }
 
 .chevron.rotated {
@@ -148,56 +169,166 @@ const sliders = computed(() =>
 }
 
 .sliders-panel {
-  margin-top: 10px;
-  padding: 14px 16px;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
+  margin-top: 12px;
+  padding: 20px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+
+.panel-header {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.total-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.total-label {
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+.total-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #111827;
+  font-variant-numeric: tabular-nums;
+}
+
+.total-value.over-limit {
+  color: #dc2626;
+}
+
+.lock-notice {
+  font-size: 0.75rem;
+  color: #dc2626;
+  margin-left: 4px;
+}
+
+.sliders-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
 
 .slider-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 16px;
 }
 
 .slider-label {
-  width: 90px;
+  min-width: 90px;
   font-size: 0.875rem;
-  font-weight: 600;
-  flex-shrink: 0;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+}
+
+.slider-control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .slider {
   flex: 1;
-  accent-color: #3b82f6;
+  height: 4px;
+  border-radius: 2px;
+  background: #e5e7eb;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
   cursor: pointer;
 }
 
-.slider-pct {
-  width: 38px;
-  text-align: right;
-  font-size: 0.875rem;
-  font-variant-numeric: tabular-nums;
-  color: #444;
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.reset-btn {
-  align-self: flex-start;
-  margin-top: 4px;
-  padding: 6px 14px;
-  background: none;
-  border: 1px solid #ccc;
+.slider::-webkit-slider-thumb:hover {
+  background: #2563eb;
+  transform: scale(1.1);
+}
+
+.slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.slider::-moz-range-thumb:hover {
+  background: #2563eb;
+  transform: scale(1.1);
+}
+
+.slider-number {
+  width: 50px;
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
   border-radius: 4px;
-  font-size: 0.82rem;
-  cursor: pointer;
-  color: #555;
+  font-size: 0.875rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #374151;
 }
 
-.reset-btn:hover {
-  background: #f5f5f5;
-  border-color: #999;
+.slider-number:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.pct {
+  font-size: 0.875rem;
+  color: #6b7280;
+  width: 16px;
+}
+
+.panel-footer {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.reset-link {
+  font-size: 0.875rem;
+  color: #3b82f6;
+  text-decoration: underline;
+  cursor: pointer;
+  display: inline-block;
+}
+
+.reset-link:hover {
+  color: #2563eb;
+}
+
+@media (max-width: 768px) {
+  .slider-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  
+  .slider-label {
+    min-width: auto;
+  }
 }
 </style>
