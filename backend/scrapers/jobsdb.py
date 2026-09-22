@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 from backend.config import settings
+import uuid
 from backend.models.job import Job, SearchCriteria
 from backend.scrapers.base import BaseScraper, ScraperError
 
@@ -19,52 +20,393 @@ _BASE_URL = "https://th.jobsdb.com"
 _GRAPHQL_URL = f"{_BASE_URL}/graphql"
 
 _HEADERS = {
+    "accept": "application/graphql-response+json,application/json;q=0.9",
+    "accept-language": "en-US,en;q=0.9",
     "content-type": "application/json",
+    "origin": _BASE_URL,
+    "referer": f"{_BASE_URL}/",
+    "sec-ch-ua": '"Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
     "seek-request-brand": "jobsdb",
     "seek-request-country": "TH",
-    "origin": _BASE_URL,
-    "accept": "application/graphql-response+json,application/json;q=0.9",
     "user-agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/153.0.0.0 Safari/537.36"
     ),
 }
 
-_QUERY = """
-query JobSearchV7($params: JobSearchV7QueryInput!, $locale: Locale!, $zone: Zone!, $country: JobSearchV7Country!, $timezone: Timezone!) {
+_QUERY = """query JobSearchV7($params: JobSearchV7QueryInput!, $locale: Locale!, $zone: Zone!, $country: JobSearchV7Country!, $timezone: Timezone!, $tagsSubType: [JobSearchV7TagsSubType!]) {
   jobSearchV7(params: $params) {
     results {
       jobs {
         id
         title
         abstract
-        advertiser { name }
-        categories { label(locale: $locale) }
-        location { displayName { text } }
+        adDisplay
+        advertiser {
+          id
+          name
+          __typename
+        }
+        organisation {
+          id
+          name
+          companyProfileId
+          companyProfileUrl
+          companyProfileRelativeUrlToBeUsedWithZone
+          __typename
+        }
+        categories {
+          id
+          label(locale: $locale)
+          __typename
+        }
+        location {
+          id
+          displayName {
+            text
+            __typename
+          }
+          seoHierarchy {
+            contextualName {
+              text
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
         cjs {
+          workTypes {
+            sourceId
+            name(locale: $locale)
+            __typename
+          }
+          source {
+            isAutoIncluded
+            __typename
+          }
           salary {
             hideSalary
             minimum
             maximum
             currency
+            period
             displayValue
+            __typename
           }
+          roleTitles {
+            shortId
+            isDistinct
+            __typename
+          }
+          product {
+            branding {
+              companyLogoURL
+              __typename
+            }
+            bullets
+            adType {
+              sourceId
+              __typename
+            }
+            __typename
+          }
+          externalReferences {
+            id
+            sourceSystem
+            type
+            metadata {
+              name
+              assets {
+                profilePhotoUrl
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
         }
-        listedAt { dateTimeUtc }
+        listedAt {
+          dateTimeUtc
+          label(context: JOB_POSTED, length: SHORT, timezone: $timezone, locale: $locale)
+          __typename
+        }
+        salary {
+          period
+          min
+          max
+          currency
+          __typename
+        }
+        sol
+        tags(subType: $tagsSubType) {
+          type
+          label(locale: $locale)
+          __typename
+        }
         url
         workArrangements {
-          label { lang text }
+          id
+          label {
+            lang
+            text
+            __typename
+          }
+          __typename
         }
+        activity {
+          visitedApplicationSite {
+            count
+            mostRecent {
+              dateTimeUtc
+              __typename
+            }
+            __typename
+          }
+          applicationEnds {
+            count
+            mostRecent {
+              dateTimeUtc
+              __typename
+            }
+            __typename
+          }
+          applicationStarts {
+            count
+            mostRecent {
+              dateTimeUtc
+              __typename
+            }
+            __typename
+          }
+          impressions {
+            count
+            mostRecent {
+              dateTimeUtc
+              __typename
+            }
+            __typename
+          }
+          jobDetails {
+            count
+            mostRecent {
+              dateTimeUtc
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
       }
-      pagination { page pageSize resultCount }
+      pagination {
+        page
+        pageSize
+        resultCount
+        __typename
+      }
+      __typename
     }
+    enrichment {
+      facets {
+        categoryV1 {
+          id
+          label {
+            lang
+            text
+            __typename
+          }
+          count
+          __typename
+        }
+        distinctTitleV1 {
+          id
+          label
+          count
+          __typename
+        }
+        __typename
+      }
+      suggestions {
+        queryParamLabelsV1 {
+          text
+          where {
+            id
+            kind
+            label {
+              lang
+              text
+              __typename
+            }
+            contextualName {
+              lang
+              text
+              __typename
+            }
+            contextualNameLocalisations(siteKey: $country) {
+              lang
+              text
+              __typename
+            }
+            isGranular
+            defaultDistanceKms
+            __typename
+          }
+          locationsHierarchy {
+            id
+            kind
+            label {
+              lang
+              text
+              __typename
+            }
+            contextualName {
+              lang
+              text
+              __typename
+            }
+            isGranular
+            defaultDistanceKms
+            __typename
+          }
+          __typename
+        }
+        relatedSearchesV1 {
+          totalJobs
+          text
+          __typename
+        }
+        organisationV1 {
+          organisationId
+          organisationName
+          totalJobs
+          __typename
+        }
+        locationV1 {
+          local {
+            sequence
+            completions {
+              id
+              label(locale: $locale, zone: $zone, context: CONTEXTUAL_NAME, labelType: SHORT)
+              __typename
+            }
+            __typename
+          }
+          international {
+            sequence
+            completions {
+              id
+              label(locale: $locale, zone: $zone, context: CONTEXTUAL_NAME, labelType: SHORT)
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        sabFilterV1 {
+          showSABFilter
+          __typename
+        }
+        canonicalV1 {
+          text
+          where {
+            id
+            name
+            __typename
+          }
+          __typename
+        }
+        spellingCorrectionV1 {
+          type
+          count
+          searchToken
+          label {
+            lang
+            defaultText
+            __typename
+          }
+          intent {
+            country
+            locale
+            text
+            where
+            whereId
+            sort
+            distanceKms
+            filter {
+              advertiserId
+              categoryId
+              listedAt
+              organisationId
+              organisationName
+              salaryMin
+              salaryMax
+              tags
+              workTypeId
+              workArrangementId
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    context {
+      searchToken
+      filterNewSince
+      representations {
+        uiV1 {
+          country
+          locale
+          text
+          where
+          whereId
+          sort
+          distanceKms
+          filter {
+            advertiserId
+            categoryId
+            listedAt
+            organisationId
+            organisationName
+            salaryMin
+            salaryMax
+            tags
+            workTypeId
+            workArrangementId
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    metadata {
+      flight
+      request {
+        correlationId
+        __typename
+      }
+      sol
+      __typename
+    }
+    __typename
   }
-}
-""".strip()
+}""".strip()
 
 _DETAIL_QUERY = """
-query jobDetails($jobId: ID!, $zone: Zone!, $locale: Locale!, $countryCode: CountryCodeIso2!, $timezone: Timezone!) {
+query jobDetails($jobId: ID!, $zone: Zone!, $locale: Locale!) {
   jobDetails(id: $jobId, tracking: {channel: "WEB"}) {
     job {
       content(platform: WEB)
@@ -117,29 +459,47 @@ def extract_skills(html_content: str, vocab: list[str] = SKILLS_VOCAB) -> list[s
 
 
 def _build_variables(criteria: SearchCriteria, page_num: int) -> dict:
+    session_id = str(uuid.uuid4())
     return {
         "params": {
             "searchIntent": {
                 "country": "TH",
                 "locale": "en-TH",
                 "text": criteria.keywords,
+                "distanceKms": 50,
                 "sort": "score",
             },
             "searchContext": {
                 "brand": "jobsdb",
                 "channel": "web",
+                "solVisitorId": session_id,
+                "intent": "SEARCH",
+                "source": "FE_SERP",
             },
             "responseConfig": {
                 "results": ["jobs"],
                 "representations": ["uiV1"],
                 "page": page_num,
                 "pageSize": _PAGE_SIZE,
+                "enrichment": {
+                    "suggestions": [
+                        "locationV1",
+                        "queryParamLabelsV1",
+                        "sabFilterV1",
+                        "organisationV1",
+                        "spellingCorrectionV1",
+                        "relatedSearchesV1",
+                    ],
+                    "relatedSearchesCount": 12,
+                },
             },
+            "sessionId": session_id,
         },
         "locale": "en-TH",
         "zone": "asia-3",
         "timezone": "Asia/Bangkok",
         "country": "TH",
+        "tagsSubType": ["VSAB"],
     }
 
 
@@ -160,11 +520,9 @@ def _map_job(raw: dict) -> Job:
     # work_arrangement: first label where lang == "en"
     work_arrangement = None
     for wa in raw.get("workArrangements") or []:
-        for lbl in wa.get("label") or []:
-            if lbl.get("lang") == "en":
-                work_arrangement = lbl.get("text")
-                break
-        if work_arrangement is not None:
+        lbl = wa.get("label") or {}
+        if isinstance(lbl, dict) and lbl.get("lang") == "en":
+            work_arrangement = lbl.get("text")
             break
 
     location_obj = raw.get("location") or {}
@@ -173,9 +531,12 @@ def _map_job(raw: dict) -> Job:
 
     categories = [c["label"] for c in (raw.get("categories") or []) if c.get("label")]
 
+    # Generate job URL: use API url if present, otherwise construct from job_id
     url: str = raw.get("url") or ""
-    if url.startswith("/"):
+    if url and url.startswith("/"):
         url = _BASE_URL + url
+    elif not url:  # API returned null/empty
+        url = f"{_BASE_URL}/job/{raw['id']}"
 
     listed_at = (raw.get("listedAt") or {}).get("dateTimeUtc")
     advertiser = raw.get("advertiser") or {}
@@ -210,7 +571,15 @@ async def _post_with_retry(client: httpx.AsyncClient, payload: dict) -> dict:
 
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = await client.post(_GRAPHQL_URL, json=payload, headers=_HEADERS)
+            # Generate session IDs for this request
+            session_id = str(__import__('uuid').uuid4())
+            headers = {**_HEADERS, 
+                      'x-seek-ec-sessionid': session_id,
+                      'x-seek-ec-visitorid': session_id,
+                      'x-request-id': str(__import__('uuid').uuid4()),
+                      'x-seek-site': 'chalice',
+                      'x-custom-features': 'application/features.seek.all+json'}
+            resp = await client.post(_GRAPHQL_URL, json=payload, headers=headers)
         except (httpx.NetworkError, httpx.TimeoutException) as exc:
             last_exc = exc
             await asyncio.sleep(_RETRY_BASE_DELAY * (2**attempt))
@@ -225,6 +594,10 @@ async def _post_with_retry(client: httpx.AsyncClient, payload: dict) -> dict:
             )
             await asyncio.sleep(_RETRY_BASE_DELAY * (2**attempt))
             continue
+
+        # DEBUG: Log error response body for non-2xx
+        if resp.status_code >= 400:
+            logger.error(f"GraphQL error {resp.status_code}: {resp.text[:500]}")
 
         resp.raise_for_status()
         return resp.json()
@@ -361,15 +734,22 @@ class JobsDBScraper(BaseScraper):
                     payload = {
                         "operationName": "JobSearchV7",
                         "variables": _build_variables(criteria, page_num),
+                        "extensions": {"clientLibrary": {"name": "@apollo/client", "version": "4.2.9"}},
                         "query": _QUERY,
                     }
                     data = await _post_with_retry(client, payload)
+                    logger.error(f"GraphQL response: {data}")
 
-                    results = (
-                        data.get("data", {})
-                        .get("jobSearchV7", {})
-                        .get("results", {})
-                    )
+                    if not data or "data" not in data:
+                        logger.error(f"Invalid response structure: {data}")
+                        break
+
+                    job_search = data.get("data", {}).get("jobSearchV7")
+                    if not job_search:
+                        logger.error(f"No jobSearchV7 in response")
+                        break
+
+                    results = job_search.get("results", {})
                     page_jobs: list[dict] = results.get("jobs") or []
                     pagination: dict = results.get("pagination") or {}
                     result_count: int = pagination.get("resultCount", 0)
@@ -481,8 +861,6 @@ class JobsDBScraper(BaseScraper):
                 "jobId": job_id,
                 "zone": "asia-3",
                 "locale": "en-TH",
-                "countryCode": "TH",
-                "timezone": "Asia/Bangkok",
             },
             "query": _DETAIL_QUERY,
         }

@@ -31,7 +31,7 @@ def _make_job_dict(job_id: str, title: str, **overrides) -> dict:
         },
         "listedAt": {"dateTimeUtc": "2024-01-15T08:00:00Z"},
         "url": "/software-engineer-jobs/job-123",
-        "workArrangements": [{"label": [{"lang": "en", "text": "Hybrid"}]}],
+        "workArrangements": [{"label": {"lang": "en", "text": "Hybrid"}}],
     }
     base.update(overrides)
     return base
